@@ -215,15 +215,15 @@ def _session_id(config: RunnableConfig) -> str:
         return "sin-sesion"
 
 def _call_credito_a2a(instruccion: str, datos: dict, session_id: str) -> str:
-    """You communicate with the credit agent via its chat interface. Hard data belongs in the `context` field,
-    not in the message text; the child agent should not have to extract numbers from the text.
+    """Le habla al agente de crédito por su /chat. Los datos duros van en `context`,
+    no en la prosa del mensaje: el agente hijo no tiene que extraer números del texto.
 
-    Each call uses a dedicated thread within the child agent; this is a single-turn RPC,
-    not a conversation. If the same thread is reused, the history accumulates, and the
-    smaller model stops invoking its tools (it may even repeat the result of the
-    previous operation as if it were the new response). The conversation with the user
-    is managed by this agent, whereas the credit agent simply executes tasks and responds.
-    The user's `session_id` is included in the thread name to allow for call tracing.
+    Cada llamada usa un thread propio en el agente hijo: esto es un RPC de un solo turno,
+    no una conversación. Si se reutiliza el mismo thread, el historial se acumula y el
+    modelo chico deja de llamar sus herramientas (llega a repetir el resultado de la
+    operación anterior como si fuera la respuesta nueva). La conversación con el usuario
+    la lleva este agente; el de crédito solo ejecuta y contesta.
+    El session_id del usuario queda en el nombre del thread para poder trazar la llamada.
     """
     payload = {
         "message": instruccion,
@@ -251,13 +251,13 @@ def _call_credito_rest(metodo: str, path: str, payload: dict = None) -> str:
 MARCADOR_RESULTADOS = "[RESULTADO_TOOLS]"
 
 def _procesar_a2a(respuesta: str) -> str:
-    """Translate the-credit-agent's response into the same contract returned by the REST mode.
-    The credit agent appends the ACTUAL result of the tools it executed to its response,
-    under the [RESULTADO_TOOLS] marker. That block is written by your code, not your model.
-    This is essential: a small model might reply "I recorded the purchase" without having
-    actually called the tool; without this verification, we would assume a transaction
-    took place that never actually occurred (in the case of a payment, with the money
-    already debited from the account).
+    """Traduce la respuesta del agente de crédito al mismo contrato que devuelve el modo rest.
+
+    El agente de crédito anexa a su respuesta el resultado REAL de las tools que ejecutó,
+    bajo el marcador [RESULTADO_TOOLS]. Ese bloque lo escribe su código, no su modelo.
+    Es imprescindible: un modelo chico puede responder "registré la compra" sin haber
+    llamado la herramienta, y sin esta verificación daríamos por hecha una operación que
+    nunca ocurrió (en el caso del abono, con el dinero ya debitado de la cuenta).
     """
     if MARCADOR_RESULTADOS not in (respuesta or ""):
         return ("ERROR: el agente de credito no ejecuto la operacion (respondio sin "
@@ -303,7 +303,10 @@ def _perfil_financiero(cliente_id: str) -> dict:
 
 @tool
 def credito_solicitar_tarjeta(cliente_id: str, config: RunnableConfig) -> str:
-    """Check with the credit agent to see if a customer can obtain a credit card and, if they qualify, issue it. Return the approval status, card ID, limit, and available credit spending amount. Only the customer ID is required; the financial profile is calculated automatically."""
+    """Consulta al agente de crédito si un cliente puede sacar una tarjeta de crédito y,
+    si califica, la emite. Devuelve si fue aprobada, el id de tarjeta, el límite y cuánto
+    dinero de crédito tiene disponible para gastar. Solo necesita el id del cliente: el perfil
+    financiero se calcula solo."""
     cliente = next((c for c in IN_MEMORY_DB["clientes"] if c["id"] == cliente_id), None)
     if not cliente:
         return "ERROR: cliente no encontrado."
@@ -321,9 +324,9 @@ def credito_solicitar_tarjeta(cliente_id: str, config: RunnableConfig) -> str:
 @tool
 def credito_comprar(tarjeta_id: str, objeto: str, cuotas: int, monto_cuota: float,
                     config: RunnableConfig) -> str:
-    """Purchase an item using a credit card in installments via the credit agent.
-    Receives the card ID, the item to be purchased, the number of installments, and the installment amount.
-    Returns the transaction ID and the remaining available credit."""
+    """Compra un objeto con tarjeta de crédito en cuotas a través del agente de crédito.
+    Recibe el id de la tarjeta, el objeto a comprar, la cantidad de cuotas y de cuánto es cada
+    cuota. Devuelve el id de transacción y el crédito disponible que queda."""
     datos = {"tarjeta_id": tarjeta_id, "objeto": objeto,
              "cuotas": cuotas, "monto_cuota": monto_cuota}
     try:
@@ -338,7 +341,9 @@ def credito_comprar(tarjeta_id: str, objeto: str, cuotas: int, monto_cuota: floa
 @tool
 def credito_abonar(transaccion_id: str, monto: float, cuenta_origen: str,
                    config: RunnableConfig) -> str:
-    """Processes a credit card purchase payment by debiting funds from the customer's bank account. It receives the transaction ID, the payment amount, and the source account. The user must specify the source account."""
+    """Abona dinero de una compra con tarjeta de crédito, debitando el dinero de una cuenta
+    bancaria del cliente. Recibe el id de transacción, el dinero a abonar y la cuenta de origen.
+    La cuenta de origen la tiene que indicar el usuario."""
     cuenta = next((c for c in IN_MEMORY_DB["cuentas"] if c["cuentaId"] == cuenta_origen), None)
     if not cuenta:
         return f"ERROR: cuenta de origen {cuenta_origen} no encontrada."
@@ -361,7 +366,8 @@ def credito_abonar(transaccion_id: str, monto: float, cuenta_origen: str,
             respuesta = _call_credito_rest("POST", "/internal/pagos", datos)
         else:
             respuesta = _procesar_a2a(_call_credito_a2a(
-                "Apply this payment to the credit card transaction and tell me the outstanding balance, the remaining installments, and the available credit.",
+                "Aplicá este abono sobre la transacción de tarjeta de crédito y decime el "
+                "saldo pendiente, las cuotas que quedan y el disponible de la tarjeta.",
                 datos, _session_id(config)))
     except requests.exceptions.RequestException as e:
         respuesta = f"ERROR: no se pudo contactar al agente de credito ({e})."
@@ -380,13 +386,14 @@ def credito_abonar(transaccion_id: str, monto: float, cuenta_origen: str,
 
 @tool
 def credito_estado(cliente_id: str, config: RunnableConfig) -> str:
-    """Check a client's card details with the credit agent: limit, available credit, outstanding debt, and active installment purchases, including transaction IDs."""
+    """Consulta al agente de crédito las tarjetas de un cliente: límite, crédito disponible,
+    deuda y las compras en cuotas vigentes con su id de transacción."""
     try:
         if CREDITO_MODE == "rest":
             return _call_credito_rest("GET", f"/internal/tarjetas/{cliente_id}")
         return _procesar_a2a(_call_credito_a2a(
-            "Tell me this customer's credit cards with their limit, available balance, and the "
-            "Details of active installment purchases, including their transaction IDs.",
+            "Decime las tarjetas de crédito de este cliente con su límite, su disponible y el "
+            "detalle de las compras en cuotas vigentes con su id de transacción.",
             {"cliente_id": cliente_id}, _session_id(config)))
     except requests.exceptions.RequestException as e:
         return f"ERROR: no se pudo contactar al agente de credito ({e})."
@@ -463,41 +470,41 @@ llm = ChatMistralAI(
 llm_with_tools = llm.bind_tools(tools)
 
 system_prompt = SystemMessage(content="""
-You are BotiBank's virtual assistant. Your ONLY access to bank data is through the
-available tools: querying clients, accounts, transfers, deposits, utility/mortgage
-payments, and credit card operations.
+Eres el asistente virtual de BotiBank. Tu ÚNICO acceso a los datos del banco son las
+herramientas disponibles: consultar clientes, cuentas, transferencias, ingresos, pagos de
+servicios/hipotecas y el circuito de tarjetas de crédito.
 
-RULE 1 - NEVER MAKE UP DATA:
-- All bank data (client IDs, account IDs and numbers, balances, services, amounts,
-  limits, transactions) must come from the result of a tool you executed
-  in THIS conversation.
-- If you didn't execute the tool, you do NOT have the data: do not infer it, estimate it,
-  or fill it in with examples or placeholder numbers (1234567890123456, "Account 1", etc.).
-- If a tool fails or returns an empty result, state that exactly as is. Never fill in with made-up data.
-- Transcribe the values ​​returned by the tool verbatim: IDs are full UUIDs;
-  do not shorten or reformat them.
+REGLA 1 - NUNCA INVENTES DATOS:
+- Todo dato del banco (IDs de cliente, IDs y números de cuenta, saldos, servicios, importes,
+  límites, transacciones) tiene que salir del resultado de una herramienta que ejecutaste
+  en ESTA conversación.
+- Si no ejecutaste la herramienta, NO tenés el dato: no lo deduzcas, no lo estimes, no lo
+  completes con ejemplos ni números de relleno (1234567890123456, "Cuenta 1", etc.).
+- Si una herramienta falla o devuelve vacío, decilo tal cual. Nunca rellenes con datos inventados.
+- Transcribí textualmente los valores que devolvió la herramienta: los IDs son UUID completos,
+  no los acortes ni los reformatees.
 
-OPERATIONAL RULES:
-2. YOU ARE COMPLETELY AUTONOMOUS: never ask for permission or confirmation to execute a tool.
-3. If you have the necessary data (account IDs, codes), EXECUTE THE TOOL IMMEDIATELY,
-   without announcing that you are going to use it.
-4. If you are missing a piece of data, first execute the tool that retrieves it (listar_clientes,
-   consultar_cuentas, listar_servicios) and only then perform the action. One tool per step.
-5. EACH NEW REQUEST REQUIRES ITS OWN TOOL: having used a tool earlier in the
-   conversation does not provide the answer to the next question. If the user asks for something different
-   —for example, a client's accounts after you have listed clients—you must call the
-   tool corresponding to THAT request. Only respond in plain text when the answer
-   is already present in the result of a tool executed for that specific request. 6. Respond in English, in a cordial and professional manner, basing your reply solely on the
-   information returned by the tools.
+REGLAS DE OPERACIÓN:
+2. ERES COMPLETAMENTE AUTÓNOMO: nunca pidas permiso ni confirmación para ejecutar una herramienta.
+3. Si tenés los datos necesarios (IDs de cuenta, códigos), EJECUTÁ LA HERRAMIENTA INMEDIATAMENTE,
+   sin anunciar que la vas a usar.
+4. Si te falta un dato, primero ejecutá la herramienta que lo consigue (listar_clientes,
+   consultar_cuentas, listar_servicios) y recién después la acción. Una herramienta por paso.
+5. CADA PEDIDO NUEVO NECESITA SU PROPIA HERRAMIENTA: haber usado una herramienta antes en la
+   conversación no te da la respuesta a la pregunta siguiente. Si el usuario pide algo distinto
+   -por ejemplo las cuentas de un cliente después de que listaste clientes- tenés que llamar a
+   la herramienta que corresponde a ESE pedido. Solo respondé en texto plano cuando la respuesta
+   ya esté en el resultado de una herramienta ejecutada para ese mismo pedido.
+6. Respondé en español, de manera cordial y profesional, basándote únicamente en lo que
+   devolvieron las herramientas.
 
-CREDIT CARDS:
-7. For EVERYTHING related to credit cards (checking if a client is eligible for a card,
-   applying for one, making installment purchases, making payments, or checking limits and
-   available balance), use the `credito_*` tools. That process is handled by the credit agent:
-   never invent limits, nor approve or reject a card on your own.
-8. To make a credit card payment, you need the source account from which the funds will be
-   debited. This is the only piece of information you cannot infer: if the user hasn't specified
-   it, check their accounts and ask them which one to use.
+TARJETAS DE CRÉDITO:
+7. Para TODO lo relacionado con tarjetas de crédito (saber si un cliente puede sacar una tarjeta,
+   solicitarla, comprar en cuotas, abonar, o consultar el límite y el disponible) usá las herramientas
+   credito_*. Ese circuito lo maneja el agente de crédito: nunca inventes límites, ni apruebes o
+   rechaces una tarjeta por tu cuenta.
+8. Para abonar una tarjeta necesitás la cuenta de origen de la que se debita el dinero. Es el único
+   dato que no podés deducir: si el usuario no la indicó, consultá sus cuentas y preguntale cuál usar.
 """)
 
 def agent_node(state: MessagesState):

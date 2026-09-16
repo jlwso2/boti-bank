@@ -386,7 +386,7 @@ def _abrir_request() -> dict:
     return estado
 
 def _una_sola_vez(clave: tuple, operacion) -> dict:
-    """Execute the operation once per HTTP request."""
+    """Ejecuta la operación una sola vez por request HTTP."""
     estado = _request_state.get()
     if estado is None:
         return operacion()
@@ -399,8 +399,8 @@ def _una_sola_vez(clave: tuple, operacion) -> dict:
     return res
 
 def _resultado(res: dict) -> str:
-    """Converts the operation's dictionary result into the response that the LLM sees, and registers
-    the raw result for /chat to return in a structured way."""
+    """Convierte el dict de la operación en la respuesta que ve el LLM, y deja registrado
+    el resultado crudo para que /chat lo devuelva de forma estructurada."""
     estado = _request_state.get()
     if estado is not None:
         estado["resultados"].append(res)
@@ -411,7 +411,9 @@ def _resultado(res: dict) -> str:
 @tool
 def solicitar_tarjeta_credito(cliente_id: str, titular: str, ingreso_mensual: float,
                               saldo_total: float, cuota_deuda_mensual: float = 0.0) -> str:
-    """SRequests a credit card for a client and returns whether it was approved and the amount of credit available to spend. It requires the client's financial profile: monthly income, total account balance, and monthly payments on existing debts."""
+    """Solicita una tarjeta de crédito para un cliente y devuelve si fue aprobada y cuánto
+    dinero de crédito tiene disponible para gastar. Requiere el perfil financiero del cliente:
+    ingreso mensual, saldo total en cuentas y cuota mensual de deudas que ya tiene."""
     return _resultado(_una_sola_vez(
         ("solicitar", cliente_id),
         lambda: _op_solicitar_tarjeta(cliente_id, titular, ingreso_mensual,
@@ -419,27 +421,30 @@ def solicitar_tarjeta_credito(cliente_id: str, titular: str, ingreso_mensual: fl
 
 @tool
 def comprar_con_tarjeta(tarjeta_id: str, objeto: str, cuotas: int, monto_cuota: float) -> str:
-    """Records a credit card purchase made in installments. It accepts the card ID, the item being purchased, the number of installments, and the installment amount. It returns the generated transaction ID and the remaining available credit."""
+    """Registra una compra con tarjeta de crédito en cuotas. Recibe el id de la tarjeta, el
+    objeto que se compra, la cantidad de cuotas y de cuánto dinero es cada cuota. Devuelve el
+    id de transacción generado y el crédito disponible que queda."""
     return _resultado(_una_sola_vez(
         ("comprar", tarjeta_id, objeto, cuotas, monto_cuota),
         lambda: _op_comprar(tarjeta_id, objeto, cuotas, monto_cuota)))
 
 @tool
 def abonar_tarjeta(transaccion_id: str, monto: float) -> str:
-    """Makes a payment toward a credit card purchase. Accepts the transaction ID and the payment amount. Returns the outstanding balance, remaining installments, and the available credit released on the card."""
+    """Abona (paga) dinero sobre una compra hecha con tarjeta de crédito. Recibe el id de
+    transacción y el dinero a abonar. Devuelve el saldo pendiente, las cuotas que quedan y el
+    crédito disponible liberado en la tarjeta."""
     return _resultado(_una_sola_vez(
         ("abonar", transaccion_id, monto),
         lambda: _op_abonar(transaccion_id, monto)))
 
 @tool
 def consultar_tarjetas(cliente_id: str) -> str:
-    """Lists the credit cards of a client with their limit and available credit."""
+    """Lista las tarjetas de crédito de un cliente con su límite y su crédito disponible."""
     return _resultado(_op_consultar_tarjetas(cliente_id))
 
 @tool
 def estado_cuenta_tarjeta(tarjeta_id: str) -> str:
-    """Displays the summary of a card: limit, available, total debt and the details of the
-
+    """Muestra el resumen de una tarjeta: límite, disponible, deuda total y el detalle de las
     compras vigentes con su id de transacción y cuotas pendientes."""
     return _resultado(_op_estado_cuenta(tarjeta_id))
 
@@ -467,21 +472,21 @@ llm = ChatOpenAI(
 llm_with_tools = llm.bind_tools(tools)
 
 system_prompt = SystemMessage(content="""
-You are the BotiBank CREDIT agent. You handle credit card operations: card applications,
-installment purchases, and payments applied to those purchases.
+Eres el agente de CRÉDITO de BotiBank. Gestionás tarjetas de crédito: solicitudes de tarjeta,
+compras en cuotas y abonos sobre esas compras.
 
-CRITICAL OPERATIONAL RULES:
-1. YOU ARE COMPLETELY AUTONOMOUS: never ask the user for permission or confirmation to execute a tool.
-2. If you have the necessary data, YOU MUST EXECUTE THE TOOL IMMEDIATELY and only then respond with the result.
-3. If the message includes a DATA block, use those values ​​EXACTLY AS IS: do not modify them, do not round them, and do not invent missing values.
-4. DO NOT evaluate whether a customer qualifies for a card or determine their credit limit: the
-   `solicitar_tarjeta_credito` tool decides that. Simply call the tool and communicate its verdict along with the reason it returns.
-5. You DO NOT have access to bank accounts, balances, or transfers. If asked about these, clarify that
-   you only handle credit card operations.
-6. If a tool returns text starting with "ERROR," explain exactly what went wrong to the user.
-7. NEVER claim to have registered a purchase, issued a card, or applied a payment unless you have executed
-   the corresponding tool. Tool first, then the response.
-8. NEVER ask for data already provided in the DATA block: if it is there, execute the tool using that data.
+REGLAS CRÍTICAS DE OPERACIÓN:
+1. ERES COMPLETAMENTE AUTÓNOMO: nunca pidas permiso ni confirmación al usuario para ejecutar una herramienta.
+2. Si tenés los datos necesarios, DEBES EJECUTAR LA HERRAMIENTA INMEDIATAMENTE y responder recién después con su resultado.
+3. Si el mensaje trae un bloque DATOS, usá esos valores TAL CUAL: no los modifiques, no los redondees y no inventes los que falten.
+4. NO evalúes vos si un cliente merece la tarjeta ni cuánto límite darle: eso lo decide la herramienta
+   solicitar_tarjeta_credito. Limitate a llamarla y a comunicar su veredicto junto con el motivo que devuelve.
+5. NO tenés acceso a cuentas bancarias, saldos ni transferencias. Si te preguntan por eso, aclará que
+   solo manejás el circuito de tarjetas de crédito.
+6. Si una herramienta devuelve un texto que empieza con ERROR, explicale al usuario exactamente qué falló.
+7. NUNCA afirmes que registraste una compra, emitiste una tarjeta o aplicaste un abono si no ejecutaste
+   la herramienta correspondiente. Primero la herramienta, después la respuesta.
+8. NUNCA pidas datos que ya vienen en el bloque DATOS: si están ahí, ejecutá la herramienta con ellos.
 """)
 
 def agent_node(state: MessagesState):
